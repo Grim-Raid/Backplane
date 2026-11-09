@@ -1249,6 +1249,7 @@ struct DataSettingsView: View {
                 if client.has("accounts") { NavigationLink(value: DPage(name: "accounts")) { Text("Accounts") }.buttonStyle(DButton()).accessibilityIdentifier("settings.accounts") }
                 DLine()
                 DataUpdateSection(client: client)
+                if client.has("orbit") { DLine(); DataOrbitSection(client: client) }
                 DLine()
                 if client.has("voice") { DataVoiceSection(client: client); DLine() }
                 if client.has("devices") { DataDevicesSection(client: client); DLine() }
@@ -1286,6 +1287,31 @@ struct DataUpdateSection: View {
             } else { Text("Not connected").dmono(11).foregroundStyle(BackplaneDesign.dim) }
         }
         .task(id: client.conn) { await load("update.status") }
+    }
+}
+
+// the 3D view's drag (viewer.orbit), the same three as the desktop's Settings > CAD
+struct DataOrbitSection: View {
+    @Bindable var client: DataClient
+    @State private var o: OrbitPrefs?
+    private func row(_ label: String, _ note: String, _ on: Bool, _ field: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).dmono(13)
+            Text(note).dmono(11).foregroundStyle(BackplaneDesign.dim)
+            DChoices(options: [(label: "on", value: true), (label: "off", value: false)],
+                     value: Binding(get: { on }, set: { v in Task { if let n = await client.orbit([field: v]) { o = n } } })).accessibilityIdentifier("settings.orbit.\(field)")
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DHeading(text: "3D view")
+            if let o {
+                row("Upright 3D orbit", "Keeps the model standing: a sideways drag turns it about its vertical axis, as KiCad's does. Off turns it any way.", o.upright, "upright")
+                row("Invert 3D drag across", "A sideways drag turns the model the other way.", o.invertX, "invertX")
+                row("Invert 3D drag up and down", "An up or down drag tips the model the other way.", o.invertY, "invertY")
+            } else { Text("Not connected").dmono(11).foregroundStyle(BackplaneDesign.dim) }
+        }
+        .task(id: client.conn) { o = await client.orbit() }
     }
 }
 

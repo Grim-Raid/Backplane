@@ -733,7 +733,11 @@ object DataClient {
     fun stopWatch(tid: String) { scope.launch { runCatching { call("viewer.watch", JSONObject().put("thread", tid).put("kind", "")) } } }
     /** A viewer (tab, file, thread) opens: the last one's plots go at once and late ones for it are dropped (PlotStore.begin/shown);
      *  a 3D view shows its own cached model once the hub names that model's file among the view's. A stop changes nothing here. */
+    /** The person's orbit settings (viewer.orbit): any given are set first; the answer is kept for every 3D drag (OrbitPrefs.current). */
+    suspend fun orbit(set: JSONObject = JSONObject()): OrbitPrefs? =
+        runCatching { OrbitPrefs.of(call("viewer.orbit", set).optJSONObject("orbit")) }.getOrNull()?.also { OrbitPrefs.current = it }
     suspend fun watch(tid: String, kind: String, path: String = "") {
+        if (kind.isNotEmpty() && has("orbit")) scope.launch { orbit() }
         val slot = if (kind.startsWith("3d")) listOf(hubName, tid, kind, path).joinToString("|") else ""
         val begun = if (kind.isNotEmpty()) withContext(Dispatchers.Main) { plots.begin(slot) } else null
         val kept = begun?.kept.orEmpty(); val serial = begun?.serial ?: 0

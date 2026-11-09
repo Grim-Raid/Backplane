@@ -1541,6 +1541,12 @@ gpui.paste.the.address.the.browser = Paste the address the browser landed on.
 gpui.paste.the.address.the.browser2 = Paste the address the browser landed on
 gpui.confirm.remove = Confirm remove
 gpui.submit = Submit
+gpui.upright.orbit = Upright 3D orbit
+gpui.keeps.the.model.standing.a = Keeps the model standing: a sideways drag turns it about its vertical axis, as KiCad's does. Off turns it any way.
+gpui.invert.drag.across = Invert 3D drag across
+gpui.a.sideways.drag.turns.the = A sideways drag turns the model the other way.
+gpui.invert.drag.up.and.down = Invert 3D drag up and down
+gpui.an.up.or.down.drag = An up or down drag tips the model the other way.
 
 # ---- gpui-a: improvements, accounts, bots ----
 gpui.imp.could.not.keep.this.draft = Could not keep this draft on this device. Retry.
@@ -3395,6 +3401,7 @@ android.mark.also = also on {machines}
 android.mark.newon = New thread on {machine}
 android.google.signedin = Signed in.
 android.google.back = Back to Backplane
+android.orbit.head = 3D VIEW
 # ---- ios: new entries go here ----
 
 # ---- end ----

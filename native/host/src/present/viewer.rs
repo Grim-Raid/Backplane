@@ -541,6 +541,16 @@ pub fn files_action(st: &State, hub: &str, session: &Value, action: &str, value:
     Some(ViewOut { patch: json!({"rid": rid, "drafts": drafts}), before, boards_look: false })
 }
 
+/// The person's 3D orbit settings ("on" or not, off by default): the upright orbit and either direction of a drag turned the other way.
+pub const ORBIT_UPRIGHT: &str = "viewer.orbit.upright";
+pub const ORBIT_INVERT_X: &str = "viewer.orbit.invertx";
+pub const ORBIT_INVERT_Y: &str = "viewer.orbit.inverty";
+/// `{upright, invertX, invertY}` as every client applies them to a drag: the 3D page's `orbit`, Settings' chips and data/1 `viewer.orbit`.
+pub fn orbit_of(st: &State) -> Value { orbit_from(|k| st.settings.get(k).cloned()) }
+pub fn orbit_from(get: impl Fn(&str) -> Option<String>) -> Value {
+    let on = |k: &str| get(k).as_deref().map(str::trim) == Some("on");
+    json!({"upright": on(ORBIT_UPRIGHT), "invertX": on(ORBIT_INVERT_X), "invertY": on(ORBIT_INVERT_Y)})
+}
 /// `thread.viewer`: the idle template with the page the thread's viewer has open. None for a page not ported.
 pub fn viewer_json(st: &State, template: &Value, session: &Value) -> Option<Value> {
     let sel = s(session, "sel");
@@ -622,6 +632,8 @@ pub fn viewer_json(st: &State, template: &Value, session: &Value) -> Option<Valu
         if let Some(ps) = v["panes"].as_array_mut() { for p in ps.iter_mut() { p["probe"] = json!(pr); } }
         v["probe"] = json!(pr);
     }
+    // how a drag turns the 3D page (3D, Mech and Split's 3D pane)
+    if matches!(kind, "3d" | "mech" | "split") { v["orbit"] = orbit_of(st); }
     let tab = if matches!(kind, "image" | "pdf" | "text") { "files" } else { kind };
     let chips: Vec<Value> = [("Board", "board"), ("Schematic", "schematic"), ("3D", "3d"), ("Mech", "mech"), ("Files", "files"), ("Review", "review")].iter().map(|(l, val)| json!({"label": l, "value": val, "on": *val == tab})).collect();
     v.as_object_mut()?.insert("choices".into(), Value::Array(chips));
@@ -698,6 +710,21 @@ mod tests {
         assert_eq!(viewer_json(&st, &template, &other), Some(template.clone()), "the panel left on by another thread: the idle viewer");
         let mut board = other.clone(); board["drafts"] = json!({format!("@view:{th}"): "board", "@view.at": "0|/tmp/soak2|"});
         assert!(viewer_json(&st, &template, &board).is_some(), "and its own drawing is drawn");
+    }
+    #[test] fn the_3d_pages_carry_the_orbit_settings() {
+        assert_eq!(orbit_from(|_| None), json!({"upright": false, "invertX": false, "invertY": false}), "off by default");
+        assert_eq!(orbit_from(|k| (k != ORBIT_INVERT_X).then(|| "on".to_string())), json!({"upright": true, "invertX": false, "invertY": true}));
+        assert_eq!(orbit_from(|_| Some("yes".into())), json!({"upright": false, "invertX": false, "invertY": false}), "only on is on");
+        let (mut st, th) = state();
+        st.settings.insert(ORBIT_UPRIGHT.into(), "on".into());
+        let template: Value = serde_json::from_str::<Value>(include_str!("thread_static.json")).unwrap()["viewer"].clone();
+        for (kind, has) in [("3d", true), ("board", false)] {
+            let session = json!({"sel": th, "rid": 1, "drafts": {}, "open": {}, "adding": false, "panel": false, "info": {}});
+            let o = view_action(&st, "h", &session, kind).unwrap();
+            let mut s2 = session.clone(); crate::session::patch::merge(&mut s2, &o.patch);
+            let got = viewer_json(&st, &template, &s2).unwrap();
+            if has { assert_eq!(got["orbit"]["upright"], true, "{kind}"); } else { assert!(got.get("orbit").is_none(), "{kind}"); }
+        }
     }
     #[test] fn the_view_action_and_the_viewer_of_board_schematic_and_3d_are_the_helpers() {
         let (st, th) = state(); let f = fx();

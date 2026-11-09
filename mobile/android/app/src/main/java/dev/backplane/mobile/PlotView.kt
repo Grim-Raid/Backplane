@@ -255,6 +255,14 @@ private fun turned(v: FloatArray, k: FloatArray, a: Float): FloatArray {
     return FloatArray(3) { v[it] * c + kv[it] * s + k[it] * d }
 }
 
+// the person's orbit settings (data/1 viewer.orbit; off when the hub has none): kept for the app, read by every drag
+data class OrbitPrefs(val upright: Boolean = false, val invertX: Boolean = false, val invertY: Boolean = false) {
+    companion object {
+        @Volatile var current = OrbitPrefs()
+        fun of(o: org.json.JSONObject?) = OrbitPrefs(o?.optBoolean("upright") == true, o?.optBoolean("invertX") == true, o?.optBoolean("invertY") == true)
+    }
+}
+
 // a 3D camera turning freely about a pivot (a board's rectangle's centre), like
 // SolidWorks, in a right-handed world where the board's y is flipped
 // (KiCad's y points down the screen), micrometres. r, u, f: the view's
@@ -296,6 +304,28 @@ class Orbit(val pivot: FloatArray = floatArrayOf(0f, 0f, 0f), var r: FloatArray 
         val l = hypot(mx, my)
         if (l < 1e-6f) return this
         return turn(FloatArray(3) { (u[it] * mx + r[it] * my) / l }, -l * k)
+    }
+
+    // a drag by the person's orbit settings (data/1 viewer.orbit): either direction turned the other way, upright or free
+    fun spin(mx: Float, my: Float, k: Float, o: OrbitPrefs): Orbit {
+        val x = if (o.invertX) -mx else mx; val y = if (o.invertY) -my else my
+        return if (o.upright) turntable(x, y, k) else spin(x, y, k)
+    }
+
+    // the upright orbit (KiCad's, the desktop's Camera::turntable): across turns the model about world z, up and down tips it,
+    // the view never rolls (r stays level) and stops just short of straight down or up; a view past that can only come back
+    fun turntable(mx: Float, my: Float, k: Float): Orbit {
+        val z = floatArrayOf(0f, 0f, 1f); val pole = 0.995f
+        if (abs(mx) < 1e-6f && abs(my) < 1e-6f) return this
+        fun level(fw: FloatArray, before: FloatArray): FloatArray {
+            val c = cross(fw, z); if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] > 1e-8f) { norm(c); return c }
+            val b = floatArrayOf(before[0], before[1], 0f); norm(b); return b
+        }
+        var right = level(f, r)
+        if (mx != 0f) { f = turned(f, z, -mx * k); right = turned(right, z, -mx * k) }
+        if (my != 0f) { val g = turned(f, right, -my * k); if (abs(g[2]) <= pole || abs(g[2]) < abs(f[2])) f = g }
+        norm(f); r = level(f, right); u = cross(r, f)
+        return this
     }
 
     // the model turned clockwise on screen by a
@@ -1050,7 +1080,7 @@ class PlotSurface(context: Context) : GLSurfaceView(context) {
             if (three) {
                 // one finger turns the model under it, two move it with them
                 val o = renderer.orbit.copy()
-                renderer.orbit = if (b.pointerCount >= 2) o.pan(-dx, -dy, o.unit(height)) else o.spin(-dx / density, -dy / density, 0.008f)
+                renderer.orbit = if (b.pointerCount >= 2) o.pan(-dx, -dy, o.unit(height)) else o.spin(-dx / density, -dy / density, 0.008f, OrbitPrefs.current)
             } else {
                 renderer.offX -= dx
                 renderer.offY -= dy
@@ -1110,7 +1140,7 @@ class PlotSurface(context: Context) : GLSurfaceView(context) {
         }
         if (delta != null) {
             if (three) renderer.orbit = renderer.orbit.copy().let {
-                if (event.isShiftPressed) it.pan(delta.first, delta.second, it.unit(height)) else it.spin(delta.first, delta.second, .008f)
+                if (event.isShiftPressed) it.pan(delta.first, delta.second, it.unit(height)) else it.spin(delta.first, delta.second, .008f, OrbitPrefs.current)
             } else { renderer.offX += delta.first; renderer.offY += delta.second }
         } else when (keyCode) {
             android.view.KeyEvent.KEYCODE_PLUS, android.view.KeyEvent.KEYCODE_EQUALS -> zoom(1.15f, width / 2f, height / 2f)

@@ -1564,6 +1564,12 @@ gpui.paste.the.address.the.browser = ブラウザーが開いたアドレスを�
 gpui.paste.the.address.the.browser2 = ブラウザーが開いたアドレスを貼り付け
 gpui.confirm.remove = 削除を確定
 gpui.submit = 送信
+gpui.upright.orbit = 3D 回転を直立に保つ
+gpui.keeps.the.model.standing.a = モデルを立てたまま回します。横のドラッグで鉛直軸のまわりに回ります（KiCad と同じ）。オフではどの方向にも回ります。
+gpui.invert.drag.across = 3D の横ドラッグを反転
+gpui.a.sideways.drag.turns.the = 横のドラッグでモデルが逆向きに回ります。
+gpui.invert.drag.up.and.down = 3D の縦ドラッグを反転
+gpui.an.up.or.down.drag = 上下のドラッグでモデルが逆向きに傾きます。
 
 # ---- gpui-a: improvements, accounts, bots ----
 gpui.imp.could.not.keep.this.draft = この下書きをこの端末に保存できませんでした。再試行してください。
@@ -3418,6 +3424,7 @@ android.mark.also = {machines} にもあり
 android.mark.newon = {machine} で新しいスレッド
 android.google.signedin = サインインしました。
 android.google.back = Backplane に戻る
+android.orbit.head = 3D ビュー
 # ---- ios: new entries go here ----
 
 # ---- end ----

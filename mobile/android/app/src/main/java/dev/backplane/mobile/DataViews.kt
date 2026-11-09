@@ -847,6 +847,7 @@ private fun SettingsScreen(back: () -> Unit, hub: () -> Unit, accounts: () -> Un
             DLine()
             UpdateSection()
             DLine()
+            if (DataClient.has("orbit")) { OrbitSection(); DLine() }
             DBtn(Msg.android_improve, false, modifier = Modifier.testTag("settings.improve"), onClick = improve)
             DLine()
             if (DataVoice.available) VoiceSettings()
@@ -886,6 +887,27 @@ private fun SettingsScreen(back: () -> Unit, hub: () -> Unit, accounts: () -> Un
             }
             DLine()
             DBtn(Msg.android_unpair, false, modifier = Modifier.testTag("settings.unpair")) { DataClient.unpair(); back() }
+        }
+    }
+}
+
+// the 3D view's drag (viewer.orbit), the same three as the desktop's Settings > CAD
+@Composable
+private fun OrbitSection() {
+    val scope = rememberCoroutineScope()
+    var o by remember { mutableStateOf<OrbitPrefs?>(null) }
+    LaunchedEffect(DataClient.conn) { o = DataClient.orbit() }
+    DMono(Msg.android_orbit_head, dfaint)
+    val s = o
+    if (s == null) DMono(Msg.settings_tailscale_notconnected, dcs.onSurfaceVariant, 11) else {
+        listOf(Triple(Msg.gpui_upright_orbit, Msg.gpui_keeps_the_model_standing_a, "upright" to s.upright),
+               Triple(Msg.gpui_invert_drag_across, Msg.gpui_a_sideways_drag_turns_the, "invertX" to s.invertX),
+               Triple(Msg.gpui_invert_drag_up_and_down, Msg.gpui_an_up_or_down_drag, "invertY" to s.invertY)).forEach { (label, note, f) ->
+            Text(label, color = dcs.onSurface, fontFamily = BpMono, fontSize = 14.sp)
+            DMono(note, dcs.onSurfaceVariant, 11)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(Triple("on", Msg.option_on, true), Triple("off", Msg.option_off, false)).forEach { (id, l, v) -> DBtn(l, f.second == v, modifier = Modifier.testTag("settings.orbit.${f.first}.$id")) { scope.launch { DataClient.orbit(org.json.JSONObject().put(f.first, v))?.let { o = it } } } }
+            }
         }
     }
 }

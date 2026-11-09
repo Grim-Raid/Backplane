@@ -474,6 +474,13 @@ fn cad_with(st: &State, session: &Value, info: &Value, pkg: Option<&crate::files
         row("KiCad over its API", "Lets agents edit a board in a running KiCad. Off uses the files only.", chips(&["on", "off"], set(st, "kicad.ipc", "on"), "kicad.ipc")),
         row("Board 3D", "How a board's 3D model is made: natively, the board at once and its parts as they convert, or by kicad-cli, all at the end.", chips(&["native", "kicad-cli"], set(st, "viewer.board3d", "native"), "viewer.board3d")),
     ]);
+    // the 3D view's drag, on this computer's window and the phones alike (present/viewer.rs `orbit_of`)
+    let o = super::viewer::orbit_of(st);
+    v.extend([
+        row("Upright 3D orbit", "Keeps the model standing: a sideways drag turns it about its vertical axis, as KiCad's does. Off turns it any way.", chips(&["on", "off"], onoff(o["upright"] == true), super::viewer::ORBIT_UPRIGHT)),
+        row("Invert 3D drag across", "A sideways drag turns the model the other way.", chips(&["on", "off"], onoff(o["invertX"] == true), super::viewer::ORBIT_INVERT_X)),
+        row("Invert 3D drag up and down", "An up or down drag tips the model the other way.", chips(&["on", "off"], onoff(o["invertY"] == true), super::viewer::ORBIT_INVERT_Y)),
+    ]);
     v
 }
 
@@ -879,6 +886,15 @@ mod tests {
         assert_eq!(second["buttons"][0]["value"], "fallback.chain=codex/gpt-6,claude/opus", "Move up");
         assert_eq!(second["buttons"][2]["value"], "fallback.chain=claude/opus", "Remove");
         let enabled = r.iter().find(|x| x["label"] == "Fallback hierarchy").unwrap(); assert_eq!(enabled["buttons"][0]["on"], true);
+    }
+    #[test] fn cad_offers_the_3d_orbit_settings_off_by_default_and_lights_the_kept_ones() {
+        let lit = |r: &[Value], label: &str| -> String { let row = r.iter().find(|x| x["label"] == label).unwrap_or_else(|| panic!("{label}")); row["buttons"].as_array().unwrap().iter().find(|b| b["on"] == true).unwrap()["value"].as_str().unwrap().to_string() };
+        let r = pg_rows("cad", &[], json!({}), json!({}));
+        assert_eq!(lit(&r, "Upright 3D orbit"), "viewer.orbit.upright=off"); assert_eq!(lit(&r, "Invert 3D drag across"), "viewer.orbit.invertx=off"); assert_eq!(lit(&r, "Invert 3D drag up and down"), "viewer.orbit.inverty=off");
+        let r = pg_rows("cad", &[("viewer.orbit.upright", "on"), ("viewer.orbit.inverty", "on")], json!({}), json!({}));
+        assert_eq!(lit(&r, "Upright 3D orbit"), "viewer.orbit.upright=on"); assert_eq!(lit(&r, "Invert 3D drag across"), "viewer.orbit.invertx=off"); assert_eq!(lit(&r, "Invert 3D drag up and down"), "viewer.orbit.inverty=on");
+        // drawn from the lean copy: the keys must survive it (matrix S09)
+        for k in ["viewer.orbit.upright", "viewer.orbit.invertx", "viewer.orbit.inverty"] { assert!(crate::state::fam::policy::lean_keeps(k), "{k}"); }
     }
     #[test] fn cad_keeps_the_typed_path_and_sets_it_on_a_press() {
         let r = pg_rows("cad", &[], json!({}), json!({"kicad.cli": "/usr/bin/kicad-cli", "kicad.version": "10.0.7"}));

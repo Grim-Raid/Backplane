@@ -80,6 +80,11 @@ pub struct Part { pub label: String, pub value: String, pub on: bool }
 /// The Mechanical page's parts (`viewer.mech.parts`): a press is `mech-part value`.
 pub fn mech_parts(viewer: &Value) -> Vec<Part> { arr(&viewer["mech"], "parts").map(|p| Part { label: string(p, "label"), value: string(p, "value"), on: p["on"].as_bool().unwrap_or(false) }).collect() }
 
+/// The person's orbit settings, from the viewer the hub sent, onto the 3D page when they changed.
+fn push_orbit(cx: &mut Context<Backplane>, s: &Entity<crate::viewers::solid::SolidPage>, viewer: &Value) {
+    let o = crate::viewers::solid::Orbit::of(&viewer["orbit"]);
+    if s.read(cx).orbit != o { s.update(cx, |p, _| p.orbit = o); }
+}
 /// The 3D page may be shown only when the model it holds is the source the viewer asks for (`viewer.key`): one page serves every thread, so a
 /// switched thread or a new part waits for its own frame instead of showing the last model.
 pub fn solid_ready(want: &str, have: &str) -> bool { want.is_empty() || want == have }
@@ -529,6 +534,7 @@ fn split_page(cx: &mut Context<Backplane>, light: bool, viewer: &Value, plot: &s
     let d3 = t_on.then(|| {
         let want3 = string(panes[2], "key");
         if let Some(s) = solid { if s.read(cx).reserve != 0. { s.update(cx, |p, cx| { p.reserve = 0.; cx.notify(); }); } }
+        if let Some(s) = solid { push_orbit(cx, s, viewer); }
         let model: AnyElement = match solid { Some(s) if solid_ready(&want3, have) && !have.is_empty() => div().size_full().child(s.clone()).into_any_element(), _ => model_loading(light, &trs("Loading the model…")) };
         let h = split_head(cx, light, "3d", "3D", None); pane(h, model)
     });
@@ -629,6 +635,7 @@ pub fn page(cx: &mut Context<Backplane>, reg: &Reg, light: bool, files_ui: &supe
             // what the page HOLDS, not what was queued for it: a big model's decode, a frame that fails or is replaced in the worker's slot
             // the model shown before comes back at once when it is the one asked for (the page keeps one)
             if let Some(s) = solid { if !want.is_empty() && s.read(cx).shown_key() != want { s.update(cx, |p, cx| p.want(&want, cx)); } }
+            if let Some(s) = solid { push_orbit(cx, s, viewer); }
             let have = solid.map(|s| s.read(cx).shown_key().to_string()).unwrap_or_default();
             let ready = matches!(solid, Some(s) if solid_ready(&want, &have));
             // the 3D page's own tools float top left over the model: they wrap short of the corner the pane's controls take

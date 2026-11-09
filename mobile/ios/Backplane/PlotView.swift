@@ -40,6 +40,13 @@ private struct LayerDraw {
 // (KiCad's y points down the screen), micrometres. r, u, f: the view's
 // right, up and forward; pan: in the view plane; dist: from the eye to the
 // pivot's depth
+// the person's orbit settings (data/1 viewer.orbit; off when the hub has none): kept for the app, read by every drag
+struct OrbitPrefs: Decodable, Equatable {
+    var upright = false, invertX = false, invertY = false
+    nonisolated(unsafe) static var current = OrbitPrefs()
+}
+struct DOrbit: Decodable { var orbit: OrbitPrefs }
+
 struct Orbit {
     var pivot = SIMD3<Float>(0, 0, 0)
     var r = SIMD3<Float>(1, 0, 0)
@@ -83,6 +90,26 @@ struct Orbit {
         let l = simd_length(m)
         guard l > 1e-6 else { return }
         turn((u * m.x + r * m.y) / l, -l * k)
+    }
+
+    // a drag by the person's orbit settings (data/1 viewer.orbit): either direction turned the other way, upright or free
+    mutating func spin(_ m: SIMD2<Float>, _ k: Float, _ o: OrbitPrefs) {
+        let m = SIMD2(o.invertX ? -m.x : m.x, o.invertY ? -m.y : m.y)
+        if o.upright { turntable(m, k) } else { spin(m, k) }
+    }
+
+    // the upright orbit (KiCad's, the desktop's Camera::turntable): across turns the model about world z, up and down tips it,
+    // the view never rolls (r stays level) and stops just short of straight down or up; a view past that can only come back
+    mutating func turntable(_ m: SIMD2<Float>, _ k: Float) {
+        let z = SIMD3<Float>(0, 0, 1), pole: Float = 0.995
+        guard abs(m.x) > 1e-6 || abs(m.y) > 1e-6 else { return }
+        func level(_ f: SIMD3<Float>, _ before: SIMD3<Float>) -> SIMD3<Float> {
+            let c = simd_cross(f, z); return simd_length_squared(c) > 1e-8 ? simd_normalize(c) : simd_normalize(SIMD3(before.x, before.y, 0))
+        }
+        var right = level(f, r)
+        if m.x != 0 { let q = simd_quatf(angle: -m.x * k, axis: z); f = q.act(f); right = q.act(right) }
+        if m.y != 0 { let g = simd_quatf(angle: -m.y * k, axis: right).act(f); if abs(g.z) <= pole || abs(g.z) < abs(f.z) { f = g } }
+        f = simd_normalize(f); r = level(f, right); u = simd_cross(r, f)
     }
 
     // the model turned clockwise on screen by a
@@ -707,7 +734,7 @@ final class PlotCanvas: MTKView {
             var camera = renderer.orbit
             let units = camera.unit(Float(bounds.height))
             if key.modifierFlags.contains(.shift) { camera.move(delta, units) }
-            else { camera.spin(delta, 0.008) }
+            else { camera.spin(delta, 0.008, OrbitPrefs.current) }
             renderer.orbit = camera
         } else { renderer.off += delta }
         setNeedsDisplay()
@@ -829,7 +856,7 @@ final class PlotCanvas: MTKView {
             // one finger turns the model under it, two move it with them
             var o = renderer.orbit
             let m = SIMD2(Float(t.x), Float(t.y))
-            if g.numberOfTouches >= 2 { o.move(m, o.unit(Float(bounds.height))) } else { o.spin(m, 0.008) }
+            if g.numberOfTouches >= 2 { o.move(m, o.unit(Float(bounds.height))) } else { o.spin(m, 0.008, OrbitPrefs.current) }
             renderer.orbit = o
             setNeedsDisplay()
             return

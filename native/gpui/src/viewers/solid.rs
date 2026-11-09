@@ -268,6 +268,13 @@ pub fn parse_frame(b: &[u8]) -> Option<SolidFrame> {
 /// 0.14's `Orbit` (src/web/solid.js): the view turns about the model's centre (`pivot`), and a pan or a zoom at the pointer moves it within
 /// the view's plane (`shift`, right and up from the pivot at its depth), so a turn keeps the model where the person put it on the screen.
 /// `target` is pivot + right·shift[0] + up·shift[1], kept up to date by every move (`place`).
+/// The person's orbit settings (the hub's `viewer.orbit.*`, the viewer's `orbit`): a drag's horizontal or vertical turn the other way, and the upright orbit.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Orbit { pub invert_x: bool, pub invert_y: bool, pub upright: bool }
+impl Orbit {
+    /// From the viewer's `orbit` ({upright, invertX, invertY}); anything missing is off.
+    pub fn of(v: &serde_json::Value) -> Orbit { Orbit { invert_x: v["invertX"] == true, invert_y: v["invertY"] == true, upright: v["upright"] == true } }
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera { pub right: [f32; 3], pub up: [f32; 3], pub fwd: [f32; 3], pub target: [f32; 3], pub dist: f32, pub fit: f32, pub pivot: [f32; 3], pub shift: [f32; 2] }
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
@@ -327,6 +334,26 @@ impl Camera {
         let axis = norm(add(mul(self.up, dx / l), mul(self.right, dy / l)));
         for v in [&mut self.right, &mut self.fwd, &mut self.up] { *v = rotate(*v, axis, -l * k); }
         self.reortho(); self.place();
+    }
+    /// A drag by the person's orbit settings: either direction turned the other way, and upright (`turntable`) or free.
+    pub fn orbit_by(&mut self, dx: f32, dy: f32, o: Orbit) {
+        let (dx, dy) = (if o.invert_x { -dx } else { dx }, if o.invert_y { -dy } else { dy });
+        if o.upright { self.turntable(dx, dy) } else { self.orbit(dx, dy) }
+    }
+    /// The upright orbit (KiCad's): a horizontal drag turns the model about its own vertical (Z, the axis `named` stands it on), a vertical drag
+    /// tips it toward or away from the viewer, and the view never rolls: its right stays level. The tip stops just short of looking straight down
+    /// or up, and a view already past that (Top, Bottom) can only come back toward the horizon. Same senses as `orbit`: the model follows the pointer.
+    pub fn turntable(&mut self, dx: f32, dy: f32) {
+        const Z: [f32; 3] = [0.0, 0.0, 1.0];
+        const POLE: f32 = 0.995; // |fwd·Z| at most: about 5.7° from straight down or up
+        let k = 0.008;
+        if dx.abs() < 1e-6 && dy.abs() < 1e-6 { return }
+        let level = |fwd: [f32; 3], before: [f32; 3]| { let r = cross(fwd, Z); if dot(r, r) > 1e-8 { norm(r) } else { norm([before[0], before[1], 0.0]) } };
+        let mut right = level(self.fwd, self.right);
+        if dx != 0.0 { self.fwd = rotate(self.fwd, Z, -dx * k); right = rotate(right, Z, -dx * k); }
+        if dy != 0.0 { let f = rotate(self.fwd, right, -dy * k); if f[2].abs() <= POLE || f[2].abs() < self.fwd[2].abs() { self.fwd = f; } }
+        self.fwd = norm(self.fwd); self.right = level(self.fwd, right); self.up = cross(self.right, self.fwd);
+        self.place();
     }
     /// alt drag: roll about the view axis; a drag to the right turns the model clockwise on screen (the web's `Orbit.roll`).
     pub fn roll(&mut self, dx: f32) { let (f, a) = (self.fwd, -dx * 0.008); self.right = rotate(self.right, f, a); self.up = rotate(self.up, f, a); self.reortho(); self.place(); }
@@ -494,7 +521,7 @@ pub struct SolidPage {
     /** the share of DRAFT_PIXELS a picture in motion gets, from how long the last ones took (draft_scale) */ draft_scale: f32,
     /** the model shown before (Kept); the part frames of a model brought back, until the hub's stream of it has as many */ prev: Option<Kept>, restored: Option<usize>,
     /** the hub could not make this source's model (its Note): the page offers Retry */ failed: bool,
-    pub note: String, /** room (px) the page's floating tools leave free at its top right, for the viewer pane's controls */ pub reserve: f32, worker: Worker, size: Arc<Mutex<[f32; 5]>> /* panel width, height, scale factor, origin x, y (logical px) */, asked: (usize, usize), /** the newest ticket asked for, the one on screen, the first of the model shown */ latest: u64, on_screen: u64, floor: u64, counted: u64, pub stats: Stats,
+    pub note: String, /** room (px) the page's floating tools leave free at its top right, for the viewer pane's controls */ pub reserve: f32, /** the person's orbit settings (the viewer's `orbit`, pushed by screens/viewer.rs) */ pub orbit: Orbit, worker: Worker, size: Arc<Mutex<[f32; 5]>> /* panel width, height, scale factor, origin x, y (logical px) */, asked: (usize, usize), /** the newest ticket asked for, the one on screen, the first of the model shown */ latest: u64, on_screen: u64, floor: u64, counted: u64, pub stats: Stats,
 }
 impl SolidPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -504,7 +531,7 @@ impl SolidPage {
                 if weak.update(cx, |this, cx| this.apply(msg, cx)).is_err() { break }
             }
         }).detach();
-        SolidPage { mesh: None, key: String::new(), cam: None, touched: false, fit_aspect: 0.0, image: None, retired: Vec::new(), frames: 0, drag: None, born: Vec::new(), parts: (0, 0), fading: false, focus: cx.focus_handle(), wheel: 0, stage: None, ticking: false, draft_scale: 1.0, prev: None, restored: None, failed: false, note: "No 3D model yet".into(), /* i18n-ok: the note is drawn through note_words */ reserve: 0.0, worker: Worker::spawn(tx),
+        SolidPage { mesh: None, key: String::new(), cam: None, touched: false, fit_aspect: 0.0, image: None, retired: Vec::new(), frames: 0, drag: None, born: Vec::new(), parts: (0, 0), fading: false, focus: cx.focus_handle(), wheel: 0, stage: None, ticking: false, draft_scale: 1.0, prev: None, restored: None, failed: false, note: "No 3D model yet".into(), /* i18n-ok: the note is drawn through note_words */ reserve: 0.0, orbit: Orbit::default(), worker: Worker::spawn(tx),
             size: Arc::new(Mutex::new([0.0, 0.0, 1.0, 0.0, 0.0])), asked: (0, 0), latest: 0, on_screen: 0, floor: 0, counted: 0, stats: Stats::default() }
     }
     /// The key of the model the page holds now (set when a decoded frame is applied, not when one is queued): "" before any.
@@ -655,7 +682,7 @@ impl SolidPage {
         match k {
             "left" | "right" | "up" | "down" => {
                 let (dx, dy) = match k { "left" => (-16.0, 0.0), "right" => (16.0, 0.0), "up" => (0.0, -16.0), _ => (0.0, 16.0) };
-                if m.shift { c.pan(dx, dy, h) } else { c.orbit(dx, dy) }
+                if m.shift { c.pan(dx, dy, h) } else { c.orbit_by(dx, dy, self.orbit) }
             }
             "+" | "=" | "plus" => c.zoom_by(1.15, 0.0, 0.0, 1.0),
             "-" | "_" | "minus" => c.zoom_by(1.0 / 1.15, 0.0, 0.0, 1.0),
@@ -684,7 +711,7 @@ impl SolidPage {
         Ok(path)
     }
     /// For the demo and tests: an orbit drag step as the mouse handler does it.
-    pub fn drag_by(&mut self, dx: f32, dy: f32) { if let Some(c) = &mut self.cam { c.orbit(dx, dy); } self.ask_render(true); }
+    pub fn drag_by(&mut self, dx: f32, dy: f32) { if let Some(c) = &mut self.cam { c.orbit_by(dx, dy, self.orbit); } self.ask_render(true); }
     /// For the demo: the button went up, the full picture is asked for.
     pub fn settle(&mut self) { self.ask_render(false); }
     /// Give the images back to the atlas (call before dropping the page, with the window).
@@ -765,7 +792,7 @@ impl Render for SolidPage {
                 if e.pressed_button.is_none() { this.drag = None; this.ask_render(false); cx.notify(); return } // the button went up where we could not see it
                 let (dx, dy) = (f32::from(e.position.x - last.x), f32::from(e.position.y - last.y));
                 let h = this.size.lock().unwrap()[1];
-                this.touched = true; if let Some(c) = &mut this.cam { match kind { Drag::Orbit => c.orbit(dx, dy), Drag::Pan => c.pan(dx, dy, h), Drag::Roll => c.roll(dx) } }
+                this.touched = true; if let Some(c) = &mut this.cam { match kind { Drag::Orbit => c.orbit_by(dx, dy, this.orbit), Drag::Pan => c.pan(dx, dy, h), Drag::Roll => c.roll(dx) } }
                 this.drag = Some((kind, e.position)); this.ask_render(true); // a draft while dragging, the full image on release. No repaint here: the picture's arrival is what repaints
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| { if this.drag.take().is_some() { this.ask_render(false); cx.notify(); } }))
@@ -803,7 +830,7 @@ mod tests {
         assert!(!super::note_keeps_model("", "2|/b|"));
     }
     // not `use super::*`: that glob brings gpui's own `test` attribute macro into scope and #[test] then expands into itself
-    use super::{decode_mesh, parse_frame, render, wheel_zoom, Camera, Layers, Mesh, SolidFrame, BG, add, mul, sub};
+    use super::{decode_mesh, parse_frame, render, wheel_zoom, Camera, Orbit, Layers, Mesh, SolidFrame, BG, add, mul, sub};
     use super::super::raster::smooth_normals;
     fn put(out: &mut Vec<u8>, mut v: u32) { loop { let b = (v & 0x7f) as u8; v >>= 7; if v == 0 { out.push(b); return } out.push(b | 0x80); } }
     fn zig(v: i32) -> u32 { ((v << 1) ^ (v >> 31)) as u32 }
@@ -891,6 +918,37 @@ mod tests {
         let want = super::rotate(c0.fwd, k, -l * 0.008);
         for a in 0..3 { assert!((c.fwd[a] - want[a]).abs() < 1e-4, "{:?} vs {:?}", c.fwd, want); }
         let mut c = c0; c.orbit(0.0, 0.0); assert_eq!(c, c0, "no movement, no turn");
+    }
+    #[test] fn the_orbit_settings_turn_a_drag_the_other_way() {
+        let m = mesh(); let c0 = Camera::fitted(&m);
+        let o = |x, y| Orbit { invert_x: x, invert_y: y, upright: false };
+        let mut a = c0; a.orbit_by(40.0, 25.0, Orbit::default()); let mut b = c0; b.orbit(40.0, 25.0); assert_eq!(a, b, "no setting: the plain orbit");
+        let mut a = c0; a.orbit_by(40.0, 25.0, o(true, false)); let mut b = c0; b.orbit(-40.0, 25.0); assert_eq!(a, b, "horizontal turned");
+        let mut a = c0; a.orbit_by(40.0, 25.0, o(false, true)); let mut b = c0; b.orbit(40.0, -25.0); assert_eq!(a, b, "vertical turned");
+        let mut a = c0; a.orbit_by(40.0, 25.0, Orbit { upright: true, invert_x: true, invert_y: true }); let mut b = c0; b.turntable(-40.0, -25.0); assert_eq!(a, b, "upright, both turned");
+    }
+    #[test] fn the_orbit_settings_come_from_the_viewer() {
+        assert_eq!(Orbit::of(&serde_json::json!({"upright": true, "invertX": false, "invertY": true})), Orbit { upright: true, invert_x: false, invert_y: true });
+        assert_eq!(Orbit::of(&serde_json::Value::Null), Orbit::default(), "a hub that sends none: all off");
+        assert_eq!(Orbit::of(&serde_json::json!({"upright": "on"})), Orbit::default(), "only true is on");
+    }
+    #[test] fn the_upright_orbit_keeps_the_model_standing() {
+        let m = mesh(); let c0 = Camera::fitted(&m); let r = 10.0;
+        let front = super::sub(c0.target, mul(c0.fwd, r)); let top = add(c0.target, mul(c0.up, r));
+        // same senses as the free orbit: right brings the front right, down brings the top toward the viewer
+        let mut c = c0; c.turntable(40.0, 0.0); assert!(screen(&c, front).0 > 0.5, "right takes the front right");
+        let mut c = c0; c.turntable(0.0, 40.0); assert!(screen(&c, top).2 > screen(&c0, top).2 + 0.5, "down brings the top toward the viewer");
+        // a horizontal drag turns about Z only: the camera's height above the model stays
+        let mut c = c0; c.turntable(120.0, 0.0); assert!((c.fwd[2] - c0.fwd[2]).abs() < 1e-4, "{} vs {}", c.fwd[2], c0.fwd[2]);
+        // any mix of drags: never a roll (right stays level) and never over a pole
+        let mut c = c0; for i in 0..600 { let s = if i % 7 < 4 { 1.0 } else { -1.0 }; c.turntable(9.0 * s, 13.0); }
+        assert!(c.right[2].abs() < 1e-4 && c.fwd[2].abs() <= 0.9951 && c.up[2] > 0.0, "{:?}", c);
+        assert!(super::dot(c.right, c.up).abs() < 1e-3 && super::dot(c.right, c.fwd).abs() < 1e-3 && (super::dot(c.fwd, c.fwd) - 1.0).abs() < 1e-3);
+        // from Top (straight down): it can come back toward the horizon, not go further
+        let t = c0.named("top"); let mut c = t; c.turntable(0.0, 30.0); let mut d = t; d.turntable(0.0, -30.0);
+        assert!(c.fwd[2].abs() < 0.999 || d.fwd[2].abs() < 0.999, "one way leaves the pole");
+        assert!(c.right[2].abs() < 1e-4 && d.right[2].abs() < 1e-4 && c.fwd.iter().chain(d.fwd.iter()).all(|v| v.is_finite()));
+        let mut c = t; c.turntable(50.0, 0.0); assert!(c.fwd.iter().all(|v| v.is_finite()) && (c.fwd[2] + 1.0).abs() < 1e-4, "Top spins in place");
     }
     #[test] fn an_alt_drag_to_the_right_turns_the_model_clockwise_on_screen() {
         let m = mesh(); let c0 = Camera::fitted(&m); let top = add(c0.target, mul(c0.up, 10.0));

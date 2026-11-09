@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
 
 pub const PROTO: &str = "data/1";
 /// What this hub does beyond the base of data/1; a hub from before an addition does not list it (the app can warn instead of sending what would be dropped).
-pub const FEATURES: &[&str] = &["images", "actions", "search", "models", "mentions", "bots", "notify", "viewers", "files", "browser", "diff", "review", "fold", "picker", "voice", "order", "layers", "onboard", "push", "settled", "commands", "work", "star", "accounts", "machines", "history", "terms", "links", "devices", "queue", "buy", "status", "subview", "find"];
+pub const FEATURES: &[&str] = &["images", "actions", "search", "models", "mentions", "bots", "notify", "viewers", "files", "browser", "diff", "review", "fold", "picker", "voice", "order", "layers", "onboard", "push", "settled", "commands", "work", "star", "accounts", "machines", "history", "terms", "links", "devices", "queue", "buy", "status", "subview", "find", "orbit"];
 const PREVIEW: usize = 140;
 const ASK_SCAN: usize = 4000;
 
@@ -427,6 +427,16 @@ async fn call(hub: &Arc<Hub>, c: &mut Conn, m: &str, p: &Value) -> Result<Value,
         // the same answer every client gets (its `result`, not the reply around it); the phones draw it
         "update.status" | "update.check" | "app.update" | "update.now" => Ok(rpc(hub, c, m, json!({})).await?["result"].clone()),
         "update.channel" => { let ch = s(p, "channel"); if ch != "stable" && ch != "beta" { return Err(err("no such channel")) } rpc(hub, c, "setting.set", json!({"key":"update.channel","value":ch})).await?; Ok(rpc(hub, c, "update.status", json!({})).await?["result"].clone()) }
+        // the 3D view's drag (present/viewer.rs `orbit_of`): each of upright, invertX, invertY given (true/false) is set, then the three as they are
+        "viewer.orbit" => {
+            use crate::present::viewer::{ORBIT_UPRIGHT, ORBIT_INVERT_X, ORBIT_INVERT_Y};
+            for (f, k) in [("upright", ORBIT_UPRIGHT), ("invertX", ORBIT_INVERT_X), ("invertY", ORBIT_INVERT_Y)] {
+                if let Some(b) = p[f].as_bool() { rpc(hub, c, "setting.set", json!({"key": k, "value": if b { "on" } else { "off" }})).await?; }
+            }
+            let mut got = std::collections::HashMap::new();
+            for k in [ORBIT_UPRIGHT, ORBIT_INVERT_X, ORBIT_INVERT_Y] { if let Some(v) = hub.setting(k).await { got.insert(k, v); } }
+            Ok(json!({"orbit": crate::present::viewer::orbit_from(|k| got.get(k).cloned())}))
+        }
         "turn.interrupt" => { rpc(hub, c, "turn.interrupt", json!({"thread":s(p, "thread")})).await?; Ok(json!({})) }
         _ => match ext::call(hub, c, m, p).await { Some(r) => r, None => Err(err("unknown method")) },
     }

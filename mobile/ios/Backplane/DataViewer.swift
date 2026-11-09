@@ -36,6 +36,11 @@ struct DInfo: Decodable { var info: String
     init(from d: Decoder) throws { let c = try d.container(keyedBy: CodingKeys.self); info = c.str(.info) } }
 
 extension DataClient {
+    /// The person's orbit settings (viewer.orbit): any given are set first; the answer is kept for every 3D drag (OrbitPrefs.current).
+    func orbit(_ set: [String: Any] = [:]) async -> OrbitPrefs? {
+        guard let r: DOrbit = try? await call("viewer.orbit", set) else { return nil }
+        OrbitPrefs.current = r.orbit; return r.orbit
+    }
     func viewerFiles(_ thread: String) async -> DProjectFiles? { try? await call("viewer.files", ["thread": thread]) }
     /// A viewer (tab, file, thread) opens: the last one's plots go at once and late ones for it are dropped (PlotStore.begin/shown);
     /// a 3D view shows its own cached model once the hub names that model's file among the view's.
@@ -45,6 +50,7 @@ extension DataClient {
         // (a stop changes nothing here: it may come after the next viewer has begun, and that one drops the last one's plots itself)
         var serial = 0
         if !kind.isEmpty { let b = plots.begin(slot); serial = b.serial; if !b.kept.isEmpty { p["kept"] = b.kept } }
+        if !kind.isEmpty, has("orbit") { Task { _ = await orbit() } }
         do {
             let r: DWatch = try await call("viewer.watch", p)
             if !kind.isEmpty { plots.shown(r.keys.isEmpty ? PlotStore.keys(kind: kind, root: r.root, path: path) : r.keys, of: serial) }
