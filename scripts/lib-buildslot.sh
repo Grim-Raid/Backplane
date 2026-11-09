@@ -4,12 +4,22 @@
 # Slots are flock files in $BUILD_LOCK_DIR (default ~/.cache/backplane-build.locks): a build holds slot.N while its command runs, the next waits for a free one.
 # Env: BUILD_SLOTS (fixed count), BUILD_LOCK_DIR, SCCACHE_DIR (default ~/.cache/sccache), SCCACHE_CACHE_SIZE (default 20G), NO_SCCACHE=1 (no compiler cache).
 . "$(dirname "${BASH_SOURCE[0]}")/lib-boat.sh"   # builds on a Boat sandbox when every slot is taken (BQ_OFFLOAD=1 asks for it; BP_NO_BOAT=1 never)
-bq_mem_gb() { awk '/^MemAvailable:/ {print int($2 / 1048576)}' /proc/meminfo 2>/dev/null || echo 16; }
+# cores and free memory, on Linux (/proc) and macOS (sysctl, vm_stat: free, inactive, speculative and purgeable pages are what a build can have)
+bq_ncpu() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4; }
+bq_mem_gb() { if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/ {print int($2 / 1048576)}' /proc/meminfo; return; fi
+  vm_stat 2>/dev/null | awk '/page size of/ {ps = $8} /^Pages (free|inactive|speculative|purgeable):/ {gsub(/\./, "", $NF); n += $NF} END {print (ps && n) ? int(n * ps / 1073741824) : 16}' || echo 16; }
+# macOS has no flock(1): the same lock (flock(2) on the file) held by perl while the command runs, for the forms used here (-n, -E code, -o file cmd...). Perl opens
+# the lock file close-on-exec, so the command never holds it (what -o asks for).
+command -v flock > /dev/null 2>&1 || flock() { perl -MFcntl=:flock -e '
+  my ($nb, $code) = (0, 1); while (@ARGV && $ARGV[0] =~ /^-/) { my $o = shift; if ($o eq "-n") { $nb = 1 } elsif ($o eq "-E") { $code = shift } elsif ($o ne "-o") { die "flock: $o is not supported here\n" } }
+  my $f = shift; open(my $fh, ">>", $f) or die "flock: $f: $!\n"; flock($fh, LOCK_EX | ($nb ? LOCK_NB : 0)) or exit $code;
+  my $pid = fork() // die "flock: fork: $!\n"; if (!$pid) { exec { $ARGV[0] } @ARGV or exit 127 }
+  waitpid($pid, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' -- "$@"; }
 # slots: one per 12 cores and per 6 GB free, between 1 and 3 (this machine: 2)
 bq_slots() { [ -n "${BUILD_SLOTS:-}" ] && { echo "$BUILD_SLOTS"; return; }
-  local c m n; c=$(( $(nproc) / 12 )); m=$(( $(bq_mem_gb) / 6 )); n=$(( c < m ? c : m )); [ "$n" -lt 1 ] && n=1; [ "$n" -gt 3 ] && n=3; echo "$n"; }
+  local c m n; c=$(( $(bq_ncpu) / 12 )); m=$(( $(bq_mem_gb) / 6 )); n=$(( c < m ? c : m )); [ "$n" -lt 1 ] && n=1; [ "$n" -gt 3 ] && n=3; echo "$n"; }
 # cargo -j for one build holding a slot: about 2 GB a job from what is free, a share of the cores, at most the 28 the builds are pinned to, at least 1
-bq_jobs() { local n g c j; n=$(bq_slots); g=$(( $(bq_mem_gb) / 2 )); c=$(( $(nproc) / n )); j=$g; [ "$c" -lt "$j" ] && j=$c; [ "$j" -gt 28 ] && j=28; [ "$j" -lt 1 ] && j=1; echo "$j"; }
+bq_jobs() { local n g c j; n=$(bq_slots); g=$(( $(bq_mem_gb) / 2 )); c=$(( $(bq_ncpu) / n )); j=$g; [ "$c" -lt "$j" ] && j=$c; [ "$j" -gt 28 ] && j=28; [ "$j" -lt 1 ] && j=1; echo "$j"; }
 # bq_run CALLBACK CMD...: run CMD holding a slot, waiting for a free one (CALLBACK, if any, is run once when it has to wait). `flock -o` closes the lock's descriptor in CMD,
 # so nothing CMD leaves running in the background (a sleep, a server) can keep the slot after CMD ends; the flock process itself holds it until CMD exits.
 bq_run() { local cb=$1 d=${BUILD_LOCK_DIR:-$HOME/.cache/backplane-build.locks} i n rc waited=0 tick=0; shift; mkdir -p "$d"
@@ -32,7 +42,7 @@ bq_cc() { [ -z "${NO_SCCACHE:-}" ] && [ -z "${RUSTC_WRAPPER:-}" ] && command -v 
 # newest kept dirs survive; a passing or interrupted run removes its own. Only dirs this function made are ever touched; BPT_BASE (default $BP_TMP, ~/.cache/bp-tmp) moves it.
 . "$(dirname "${BASH_SOURCE[0]}")/lib-bptmp.sh"
 bpt_new() { mkdir -p "${BPT_BASE:-$BP_TMP}"; mktemp -d "${BPT_BASE:-$BP_TMP}/bpt-XXXXXX"; }
-bpt_rm() { [ -n "$1" ] && [ -d "$1" ] && [ ! -L "$1" ] || return 0; chmod -R u+rwX "$1" 2>/dev/null; rm -rf --one-file-system "$1"; }
+bpt_rm() { [ -n "$1" ] && [ -d "$1" ] && [ ! -L "$1" ] || return 0; chmod -R u+rwX "$1" 2>/dev/null; if rm --version > /dev/null 2>&1; then rm -rf --one-file-system "$1"; else rm -rf "$1"; fi; }   # (BSD rm on macOS has no --one-file-system)
 bpt_end() { local t=$1 rc=${2:-0} k=${BPT_KEEP:-5} d i=0
   [ -n "$t" ] && [ -d "$t" ] || return 0
   if [ "$rc" = 0 ]; then bpt_rm "$t"; return 0; fi

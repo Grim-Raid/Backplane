@@ -57,8 +57,9 @@ skips=(); while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) skips+=(--skip "$
 # (a running test program holds no cargo lock). Every test still runs and a red one still stops the build before anything is published.
 # the hub says which commit it was compiled from (main.rs commit_of): the guard checks an update against it, so it is set here, not when the build is started
 if git -C "$ROOT" rev-parse --short HEAD > /dev/null 2>&1; then export BACKPLANE_COMMIT=$(git -C "$ROOT" rev-parse --short HEAD); fi   # (a Boat box's copy has no .git: the caller's value is passed in)
-ncpu=$(nproc); [ "$ncpu" -gt 28 ] && ncpu=28
-CG() { ( cd "$1" && CARGO_TARGET_DIR="$2" taskset -c 0-$((ncpu - 1)) nice -n 10 cargo "${@:3}" ) 9>&-; }  # fd 9 is the build slot (lib-buildslot.sh): this shell keeps it, no child may
+ncpu=$(bq_ncpu); [ "$ncpu" -gt 28 ] && ncpu=28
+pin=(); command -v taskset > /dev/null 2>&1 && pin=(taskset -c 0-$((ncpu - 1)))   # (macOS has no taskset: unpinned there)
+CG() { ( cd "$1" && CARGO_TARGET_DIR="$2" "${pin[@]}" nice -n 10 cargo "${@:3}" ) 9>&-; }  # fd 9 is the build slot (lib-buildslot.sh): this shell keeps it, no child may
 # The window is built WITH the embedded Chromium (feature cef; docs/browser-gpui-cef.md) unless GPUI_FEATURES is set to something else (empty: none). CEF's distribution is cached once in
 # CEF_PATH (the cef crate downloads it on the first build); if that build fails the window is built without it and says so in the Browser tab ("embedded browser unavailable").
 FEATURES=${GPUI_FEATURES-cef}; export CEF_PATH=${CEF_PATH:-$HOME/.cache/backplane/cef-rs}
